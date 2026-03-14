@@ -1,0 +1,399 @@
+name: Auto Labeler & Triage
+
+on:
+  # Issue相关事件
+  issues:
+    types: [opened, edited, reopened]
+  # 评论事件（用户可能提供更多信息）
+  issue_comment:
+    types: [created]
+  # 定时扫描未标记的issues
+  schedule:
+    - cron: '*/30 * * * *'  # 每30分钟
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Auto Label Issue
+      uses: actions/github-script@v6
+      with:
+        script: |
+          // 获取issue信息
+          const issue = context.payload.issue;
+          const comment = context.payload.comment;
+          const issueNumber = issue ? issue.number : context.payload.issue.number;
+          
+          console.log(`🔍 处理 Issue #${issueNumber}`);
+          
+          // 获取完整的issue信息
+          const { data: fullIssue } = await github.rest.issues.get({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: issueNumber
+          });
+          
+          const title = fullIssue.title.toLowerCase();
+          const body = (fullIssue.body || '').toLowerCase();
+          const labels = fullIssue.labels.map(label => label.name);
+          const content = title + ' ' + body;
+          
+          console.log(`   标题: ${fullIssue.title}`);
+          console.log(`   当前标签: ${labels.join(', ')}`);
+          
+          // 规则配置
+          const rules = [
+            // 类型规则
+            {
+              name: 'bug',
+              keywords: ['bug', '错误', '崩溃', 'crash', '不工作', '失效', 'broken', 'fix', '修复'],
+              labels: ['bug'],
+              priority: 'high'
+            },
+            {
+              name: 'feature',
+              keywords: ['feature', '功能', '新功能', 'enhancement', '改进', '建议', 'request'],
+              labels: ['enhancement'],
+              priority: 'medium'
+            },
+            {
+              name: 'documentation',
+              keywords: ['文档', 'documentation', 'readme', 'wiki', '说明', 'typo', '拼写'],
+              labels: ['documentation'],
+              priority: 'low'
+            },
+            {
+              name: 'question',
+              keywords: ['问题', '疑问', 'question', 'how to', '怎么', '如何', 'help', '求助'],
+              labels: ['question'],
+              priority: 'medium'
+            },
+            {
+              name: 'security',
+              keywords: ['安全', 'security', '漏洞', 'vulnerability', '攻击', 'hack'],
+              labels: ['security'],
+              priority: 'critical'
+            },
+            
+            // 优先级规则
+            {
+              name: 'critical',
+              keywords: ['紧急', 'urgent', 'critical', 'blocker', '生产环境', 'production', '线上问题'],
+              labels: ['priority:critical'],
+              priority: 'critical'
+            },
+            {
+              name: 'high',
+              keywords: ['重要', 'high', '尽快', '尽快修复', '重要功能'],
+              labels: ['priority:high'],
+              priority: 'high'
+            },
+            {
+              name: 'low',
+              keywords: ['低优先级', 'low', '优化', 'when possible', '有空再做'],
+              labels: ['priority:low'],
+              priority: 'low'
+            },
+            
+            // 技术栈规则
+            {
+              name: 'python',
+              keywords: ['python', 'flask', 'pandas', 'yfinance', 'numpy'],
+              labels: ['tech:python'],
+              priority: null
+            },
+            {
+              name: 'web',
+              keywords: ['web', '前端', '界面', 'ui', 'ux', '浏览器', 'html', 'css'],
+              labels: ['tech:web'],
+              priority: null
+            },
+            {
+              name: 'api',
+              keywords: ['api', '接口', 'endpoint', 'rest', 'json'],
+              labels: ['tech:api'],
+              priority: null
+            },
+            {
+              name: 'deployment',
+              keywords: ['部署', 'deploy', 'docker', '服务器', '环境', 'ci/cd'],
+              labels: ['area:deployment'],
+              priority: null
+            },
+            {
+              name: 'monitoring',
+              keywords: ['监控', 'monitor', '日志', 'alert', '报警', 'grafana'],
+              labels: ['area:monitoring'],
+              priority: null
+            }
+          ];
+          
+          // 应用规则
+          const newLabels = new Set(labels);
+          let detectedPriority = 'medium'; // 默认优先级
+          
+          rules.forEach(rule => {
+            const hasKeyword = rule.keywords.some(keyword => content.includes(keyword));
+            
+            if (hasKeyword) {
+              // 添加标签
+              rule.labels.forEach(label => {
+                if (!labels.includes(label)) {
+                  newLabels.add(label);
+                  console.log(`   ➕ 添加标签: ${label}`);
+                }
+              });
+              
+              // 更新优先级
+              if (rule.priority) {
+                // 优先级冲突时取最高优先级
+                const priorityOrder = { critical: 4, high: 3, medium: 2, low: 1 };
+                if (priorityOrder[rule.priority] > priorityOrder[detectedPriority]) {
+                  detectedPriority = rule.priority;
+                }
+              }
+            }
+          });
+          
+          // 确保有类型标签
+          const typeLabels = ['bug', 'enhancement', 'documentation', 'question', 'security'];
+          const hasTypeLabel = typeLabels.some(label => newLabels.has(label));
+          
+          if (!hasTypeLabel) {
+            newLabels.add('needs-triage');
+            console.log(`   ➕ 添加标签: needs-triage (未识别类型)`);
+          }
+          
+          // 确保有优先级标签
+          const priorityLabel = `priority:${detectedPriority}`;
+          if (!newLabels.has(priorityLabel)) {
+            newLabels.add(priorityLabel);
+            console.log(`   ➕ 添加标签: ${priorityLabel}`);
+          }
+          
+          // 移除可能的冲突优先级标签
+          const otherPriorityLabels = ['priority:critical', 'priority:high', 'priority:medium', 'priority:low']
+            .filter(label => label !== priorityLabel);
+          
+          otherPriorityLabels.forEach(label => {
+            if (newLabels.has(label)) {
+              newLabels.delete(label);
+              console.log(`   ➖ 移除冲突标签: ${label}`);
+            }
+          });
+          
+          // 更新issue标签
+          if (newLabels.size !== labels.length || !labels.every(label => newLabels.has(label))) {
+            console.log(`   🔄 更新标签...`);
+            
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: Array.from(newLabels)
+            });
+            
+            console.log(`   ✅ 标签更新完成`);
+          } else {
+            console.log(`   ⏭️  无需更新标签`);
+          }
+          
+          // 如果是新issue且没有评论，添加欢迎评论
+          if (fullIssue.comments === 0 && context.payload.action === 'opened') {
+            console.log(`   💬 添加欢迎评论...`);
+            
+            const commentBody = generateWelcomeComment(Array.from(newLabels), detectedPriority);
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: commentBody
+            });
+            
+            console.log(`   ✅ 评论添加完成`);
+          }
+          
+          // 如果是高优先级问题，添加提醒
+          if (detectedPriority === 'critical' || detectedPriority === 'high') {
+            console.log(`   ⚠️  高优先级问题 detected`);
+            
+            // 可以在这里添加通知逻辑
+            // 例如：@mention 相关人员，发送到Slack等
+          }
+          
+          function generateWelcomeComment(labels, priority) {
+            const priorityEmoji = {
+              critical: '🔴',
+              high: '🟠', 
+              medium: '🟡',
+              low: '🟢'
+            };
+            
+            return `👋 你好！感谢你提交 Issue。
+
+${priorityEmoji[priority]} **优先级:** ${priority.toUpperCase()}
+🏷️ **自动添加的标签:** ${labels.map(l => `\`${l}\``).join(', ')}
+
+## 下一步建议：
+
+1. **确认问题类型** - 如果标签不正确，请告诉我
+2. **提供更多信息** - 如果是bug，请提供复现步骤
+3. **讨论解决方案** - 如果是功能请求，让我们讨论实现方案
+
+我会定期检查这个 Issue 并提供帮助。
+
+---
+*本评论由 Auto Labeler 自动生成*`;
+          }
+    
+    - name: Process Untriaged Issues (Scheduled)
+      if: github.event_name == 'schedule'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          console.log('⏰ 定时任务：处理未标记的issues...');
+          
+          // 获取所有open issues
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            per_page: 50
+          });
+          
+          // 过滤掉pull requests
+          const realIssues = issues.filter(issue => !issue.pull_request);
+          
+          // 找出需要处理的issues（无标签或只有needs-triage）
+          const issuesToProcess = realIssues.filter(issue => {
+            const labels = issue.labels.map(l => l.name);
+            return labels.length === 0 || 
+                   (labels.length === 1 && labels[0] === 'needs-triage') ||
+                   labels.includes('needs-triage');
+          });
+          
+          console.log(`找到 ${issuesToProcess.length} 个需要处理的issues`);
+          
+          // 处理每个issue
+          for (const issue of issuesToProcess.slice(0, 10)) { // 每次最多处理10个
+            console.log(`处理 Issue #${issue.number}: ${issue.title}`);
+            
+            // 这里可以调用上面的自动标记逻辑
+            // 为了简化，我们只添加一个评论提醒
+            if (issue.comments === 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `🔍 这个 Issue 还没有被分类。请添加更多信息或合适的标签。
+
+**建议：**
+1. 如果是bug，请提供复现步骤
+2. 如果是功能请求，请描述具体需求
+3. 如果是问题咨询，请明确问题
+
+我会定期检查并提供帮助。`
+              });
+            }
+          }
+          
+          if (issuesToProcess.length > 0) {
+            console.log(`✅ 处理完成: ${Math.min(issuesToProcess.length, 10)} 个issues`);
+          } else {
+            console.log('✅ 没有需要处理的issues');
+          }
+    
+    - name: Create Triage Report
+      if: github.event_name == 'schedule'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          // 创建处理报告
+          const today = new Date().toISOString().split('T')[0];
+          
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            per_page: 100
+          });
+          
+          const realIssues = issues.filter(issue => !issue.pull_request);
+          
+          // 统计
+          const stats = {
+            total: realIssues.length,
+            untriaged: 0,
+            byPriority: { critical: 0, high: 0, medium: 0, low: 0 },
+            byType: { bug: 0, enhancement: 0, documentation: 0, question: 0, security: 0 }
+          };
+          
+          realIssues.forEach(issue => {
+            const labels = issue.labels.map(l => l.name);
+            
+            // 检查是否已分类
+            const typeLabels = ['bug', 'enhancement', 'documentation', 'question', 'security'];
+            const hasTypeLabel = typeLabels.some(label => labels.includes(label));
+            
+            if (!hasTypeLabel) {
+              stats.untriaged++;
+            }
+            
+            // 统计优先级
+            if (labels.includes('priority:critical')) stats.byPriority.critical++;
+            else if (labels.includes('priority:high')) stats.byPriority.high++;
+            else if (labels.includes('priority:medium')) stats.byPriority.medium++;
+            else if (labels.includes('priority:low')) stats.byPriority.low++;
+            
+            // 统计类型
+            typeLabels.forEach(type => {
+              if (labels.includes(type)) stats.byType[type]++;
+            });
+          });
+          
+          // 创建报告
+          const report = `# 🏷️ 自动标记报告 - ${today}
+
+## 📊 统计概览
+- **总Open Issues:** ${stats.total}
+- **未分类Issues:** ${stats.untriaged}
+- **分类率:** ${((stats.total - stats.untriaged) / stats.total * 100).toFixed(1)}%
+
+## 🎯 优先级分布
+- 🔴 Critical: ${stats.byPriority.critical}
+- 🟠 High: ${stats.byPriority.high}
+- 🟡 Medium: ${stats.byPriority.medium}
+- 🟢 Low: ${stats.byPriority.low}
+
+## 📋 类型分布
+- 🐛 Bug: ${stats.byType.bug}
+- ✨ Enhancement: ${stats.byType.enhancement}
+- 📚 Documentation: ${stats.byType.documentation}
+- ❓ Question: ${stats.byType.question}
+- 🔒 Security: ${stats.byType.security}
+
+## 💡 建议
+${stats.untriaged > 0 ? `1. 处理 ${stats.untriaged} 个未分类的issues` : '1. 所有issues已分类，继续保持！'}
+${stats.byPriority.critical > 0 ? `2. 优先处理 ${stats.byPriority.critical} 个critical问题` : ''}
+${stats.byType.bug > 5 ? `3. 考虑批量处理 ${stats.byType.bug} 个bug报告` : ''}
+
+---
+*本报告由 Auto Labeler 自动生成，每30分钟运行一次*`;
+          
+          // 如果是定时任务，创建报告issue
+          const title = `🏷️ 标签报告 ${today}`;
+          
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: report,
+            labels: ['automated', 'report', 'triage']
+          });
