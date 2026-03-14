@@ -1,0 +1,26 @@
+{
+  "python": {
+    "rules": [
+      {
+        "key": "python:S3649",
+        "priority": "MAJOR",
+        "parameters": [
+          {
+            "name": "functions",
+            "value": "eval,exec,input"
+          }
+        ]
+      },
+      {
+        "key": "python:S1313",
+        "priority": "CRITICAL",
+        "parameters": [
+          {
+            "name": "hardcodedIpAddresses",
+            "value": "0.0.0.0,127.0.0.1,localhost"
+          }
+        ]
+      }
+    ]
+  }
+}
