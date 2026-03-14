@@ -1,0 +1,361 @@
+name: Issue Monitor & Reporter
+
+on:
+  # 定时触发：每天上午10点运行
+  schedule:
+    - cron: '0 10 * * *'
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      report_type:
+        description: '报告类型'
+        required: false
+        default: 'daily'
+        type: choice
+        options:
+          - daily
+          - weekly
+          - full
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Analyze Issues
+      id: analyze
+      uses: actions/github-script@v6
+      with:
+        script: |
+          // 获取所有issues
+          const { data: allIssues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'all',
+            per_page: 100,
+            sort: 'updated',
+            direction: 'desc'
+          });
+          
+          // 过滤掉pull requests
+          const issues = allIssues.filter(issue => !issue.pull_request);
+          
+          const now = new Date();
+          const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+          const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          
+          // 分析数据
+          const analysis = {
+            summary: {
+              total: issues.length,
+              open: 0,
+              closed: 0,
+              createdToday: 0,
+              createdThisWeek: 0,
+              updatedToday: 0
+            },
+            categories: {
+              stale: [],      // 7天无更新
+              veryStale: [],  // 30天无更新
+              noLabel: [],
+              urgent: [],
+              bug: [],
+              enhancement: [],
+              question: []
+            },
+            labels: {},
+            recentActivity: []
+          };
+          
+          issues.forEach(issue => {
+            // 基础统计
+            if (issue.state === 'open') {
+              analysis.summary.open++;
+            } else {
+              analysis.summary.closed++;
+            }
+            
+            // 时间分析
+            const createdAt = new Date(issue.created_at);
+            const updatedAt = new Date(issue.updated_at);
+            
+            if (createdAt > oneDayAgo) analysis.summary.createdToday++;
+            if (createdAt > sevenDaysAgo) analysis.summary.createdThisWeek++;
+            if (updatedAt > oneDayAgo) analysis.summary.updatedToday++;
+            
+            // 标签分析
+            if (issue.labels.length === 0) {
+              analysis.categories.noLabel.push({
+                number: issue.number,
+                title: issue.title,
+                url: issue.html_url
+              });
+            }
+            
+            issue.labels.forEach(label => {
+              // 标签统计
+              analysis.labels[label.name] = (analysis.labels[label.name] || 0) + 1;
+              
+              // 分类
+              const labelName = label.name.toLowerCase();
+              if (labelName.includes('urgent') || labelName.includes('critical') || labelName.includes('blocker')) {
+                analysis.categories.urgent.push({
+                  number: issue.number,
+                  title: issue.title,
+                  url: issue.html_url
+                });
+              }
+              if (labelName.includes('bug')) {
+                analysis.categories.bug.push({
+                  number: issue.number,
+                  title: issue.title,
+                  url: issue.html_url
+                });
+              }
+              if (labelName.includes('enhancement') || labelName.includes('feature')) {
+                analysis.categories.enhancement.push({
+                  number: issue.number,
+                  title: issue.title,
+                  url: issue.html_url
+                });
+              }
+              if (labelName.includes('question') || labelName.includes('help')) {
+                analysis.categories.question.push({
+                  number: issue.number,
+                  title: issue.title,
+                  url: issue.html_url
+                });
+              }
+            });
+            
+            // 陈旧程度分析（仅open issues）
+            if (issue.state === 'open') {
+              const daysSinceUpdate = Math.floor((now - updatedAt) / (1000 * 60 * 60 * 24));
+              
+              if (daysSinceUpdate >= 30) {
+                analysis.categories.veryStale.push({
+                  number: issue.number,
+                  title: issue.title,
+                  days: daysSinceUpdate,
+                  url: issue.html_url
+                });
+              } else if (daysSinceUpdate >= 7) {
+                analysis.categories.stale.push({
+                  number: issue.number,
+                  title: issue.title,
+                  days: daysSinceUpdate,
+                  url: issue.html_url
+                });
+              }
+            }
+            
+            // 最近活动
+            if (updatedAt > sevenDaysAgo) {
+              analysis.recentActivity.push({
+                number: issue.number,
+                title: issue.title,
+                state: issue.state,
+                updated: issue.updated_at,
+                url: issue.html_url
+              });
+            }
+          });
+          
+          // 按更新时间排序
+          analysis.recentActivity.sort((a, b) => new Date(b.updated) - new Date(a.updated));
+          
+          return analysis;
+    
+    - name: Create Daily Report Issue
+      uses: actions/github-script@v6
+      env:
+        ANALYSIS: ${{ toJson(steps.analyze.outputs.result) }}
+      with:
+        script: |
+          const analysis = JSON.parse(process.env.ANALYSIS);
+          const today = new Date().toISOString().split('T')[0];
+          
+          // 生成报告内容
+          let report = `# 📊 Issue 每日报告 - ${today}\n\n`;
+          
+          report += `**报告时间:** ${new Date().toISOString()}\n`;
+          report += `**触发方式:** ${context.eventName === 'workflow_dispatch' ? '手动' : '自动'}\n\n`;
+          
+          // 总体统计
+          report += `## 📈 总体统计\n`;
+          report += `- **总Issues数:** ${analysis.summary.total}\n`;
+          report += `- **Open Issues:** ${analysis.summary.open}\n`;
+          report += `- **Closed Issues:** ${analysis.summary.closed}\n`;
+          
+          if (analysis.summary.total > 0) {
+            const closeRate = ((analysis.summary.closed / analysis.summary.total) * 100).toFixed(1);
+            report += `- **解决率:** ${closeRate}%\n`;
+          }
+          
+          report += `- **今日新增:** ${analysis.summary.createdToday}\n`;
+          report += `- **本周新增:** ${analysis.summary.createdThisWeek}\n`;
+          report += `- **今日更新:** ${analysis.summary.updatedToday}\n\n`;
+          
+          // 需要关注的问题
+          report += `## ⚠️ 需要关注的问题\n`;
+          
+          if (analysis.categories.urgent.length > 0) {
+            report += `### 🔴 紧急问题 (${analysis.categories.urgent.length}个)\n`;
+            analysis.categories.urgent.slice(0, 5).forEach(issue => {
+              report += `- [#${issue.number}](${issue.url}) ${issue.title}\n`;
+            });
+            if (analysis.categories.urgent.length > 5) {
+              report += `- ... 还有 ${analysis.categories.urgent.length - 5} 个紧急问题\n`;
+            }
+            report += `\n`;
+          }
+          
+          if (analysis.categories.veryStale.length > 0) {
+            report += `### 🕰️ 非常陈旧 (>30天无更新, ${analysis.categories.veryStale.length}个)\n`;
+            analysis.categories.veryStale.slice(0, 3).forEach(issue => {
+              report += `- [#${issue.number}](${issue.url}) ${issue.title} (${issue.days}天)\n`;
+            });
+            report += `\n`;
+          }
+          
+          if (analysis.categories.stale.length > 0) {
+            report += `### 🟡 陈旧 (7-30天无更新, ${analysis.categories.stale.length}个)\n`;
+            analysis.categories.stale.slice(0, 3).forEach(issue => {
+              report += `- [#${issue.number}](${issue.url}) ${issue.title} (${issue.days}天)\n`;
+            });
+            report += `\n`;
+          }
+          
+          if (analysis.categories.noLabel.length > 0) {
+            report += `### 🏷️ 无标签问题 (${analysis.categories.noLabel.length}个)\n`;
+            analysis.categories.noLabel.slice(0, 3).forEach(issue => {
+              report += `- [#${issue.number}](${issue.url}) ${issue.title}\n`;
+            });
+            report += `\n`;
+          }
+          
+          // 标签分布
+          if (Object.keys(analysis.labels).length > 0) {
+            report += `## 🏷️ 标签分布\n`;
+            const sortedLabels = Object.entries(analysis.labels)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 10);
+            
+            sortedLabels.forEach(([label, count]) => {
+              report += `- \`${label}\`: ${count}\n`;
+            });
+            report += `\n`;
+          }
+          
+          // 最近活动
+          if (analysis.recentActivity.length > 0) {
+            report += `## 🔄 最近7天活动\n`;
+            analysis.recentActivity.slice(0, 5).forEach(activity => {
+              const emoji = activity.state === 'open' ? '🟢' : '🔴';
+              const date = new Date(activity.updated).toLocaleDateString();
+              report += `- ${emoji} [#${activity.number}](${activity.url}) ${activity.title} (${date})\n`;
+            });
+            report += `\n`;
+          }
+          
+          // 建议
+          report += `## 💡 建议\n`;
+          
+          const suggestions = [];
+          
+          if (analysis.categories.urgent.length > 0) {
+            suggestions.push(`立即处理 ${analysis.categories.urgent.length} 个紧急问题`);
+          }
+          
+          if (analysis.categories.veryStale.length > 0) {
+            suggestions.push(`审查 ${analysis.categories.veryStale.length} 个非常陈旧的问题，考虑关闭`);
+          }
+          
+          if (analysis.categories.noLabel.length > 0) {
+            suggestions.push(`为 ${analysis.categories.noLabel.length} 个无标签问题添加标签`);
+          }
+          
+          if (analysis.summary.open > 20) {
+            suggestions.push(`考虑批量处理，当前有 ${analysis.summary.open} 个open issues`);
+          }
+          
+          if (suggestions.length === 0) {
+            suggestions.push(`继续保持良好的issue管理习惯`);
+          }
+          
+          suggestions.forEach((suggestion, index) => {
+            report += `${index + 1}. ${suggestion}\n`;
+          });
+          
+          report += `\n---\n`;
+          report += `*本报告由 GitHub Actions 自动生成，每天上午10点运行*`;
+          
+          // 创建issue
+          const title = `📊 Issue日报 ${today}`;
+          
+          // 检查是否已有今天的报告
+          const { data: existingIssues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            labels: ['automated-report', 'issues']
+          });
+          
+          const hasTodayReport = existingIssues.some(issue => 
+            issue.title.includes(today) || issue.title.includes(`Issue日报 ${today}`)
+          );
+          
+          if (!hasTodayReport) {
+            const { data: newIssue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: report,
+              labels: ['automated-report', 'issues', 'monitoring']
+            });
+            
+            console.log(`✅ 创建报告Issue: #${newIssue.number}`);
+            
+            // 添加评论包含详细数据
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: newIssue.number,
+              body: `## 📋 详细数据
+              
+              **问题分类:**
+              - Bug报告: ${analysis.categories.bug.length} 个
+              - 功能请求: ${analysis.categories.enhancement.length} 个
+              - 问题咨询: ${analysis.categories.question.length} 个
+              
+              **陈旧问题详情:**
+              - 7-30天无更新: ${analysis.categories.stale.length} 个
+              - 30天以上无更新: ${analysis.categories.veryStale.length} 个
+              
+              **运行信息:**
+              - Workflow: ${context.workflow}
+              - Run ID: ${context.runId}
+              - [查看运行详情](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+            });
+          } else {
+            console.log(`ℹ️  今天的报告已存在，跳过创建`);
+          }
+    
+    - name: Summary
+      run: |
+        echo "✅ Issue监控任务完成！"
+        echo ""
+        echo "📅 下次运行时间:"
+        echo "  每日上午10点 (UTC)"
+        echo ""
+        echo "🔧 手动触发:"
+        echo "  在Actions页面点击 'Issue Monitor & Reporter' → 'Run workflow'"
+        echo ""
+        echo "📊 报告位置:"
+        echo "  新的Issue会被创建，标签: automated-report, issues, monitoring"
