@@ -1,0 +1,227 @@
+name: Simple Issue Scanner
+
+on:
+  # 定时触发：每天上午9点运行
+  schedule:
+    - cron: '0 9 * * *'
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      detailed:
+        description: '生成详细报告'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Scan Issues
+      id: scan
+      uses: actions/github-script@v6
+      with:
+        script: |
+          // 获取所有issues
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'all',
+            per_page: 100,
+            sort: 'updated',
+            direction: 'desc'
+          });
+          
+          // 过滤掉pull requests
+          const realIssues = issues.filter(issue => !issue.pull_request);
+          
+          // 分析数据
+          const now = new Date();
+          const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          
+          let stats = {
+            total: realIssues.length,
+            open: 0,
+            closed: 0,
+            stale: 0,      // 7天无更新
+            veryStale: 0,  // 30天无更新
+            noLabel: 0,
+            urgent: 0,
+            byLabel: {},
+            staleList: [],
+            urgentList: []
+          };
+          
+          realIssues.forEach(issue => {
+            // 统计状态
+            if (issue.state === 'open') {
+              stats.open++;
+            } else {
+              stats.closed++;
+            }
+            
+            // 统计标签
+            if (issue.labels.length === 0) {
+              stats.noLabel++;
+            }
+            
+            issue.labels.forEach(label => {
+              stats.byLabel[label.name] = (stats.byLabel[label.name] || 0) + 1;
+              
+              // 检查紧急标签
+              const urgentLabels = ['urgent', 'critical', 'bug', 'high-priority', 'blocker'];
+              if (urgentLabels.includes(label.name.toLowerCase())) {
+                stats.urgent++;
+                stats.urgentList.push({
+                  number: issue.number,
+                  title: issue.title,
+                  url: issue.html_url
+                });
+              }
+            });
+            
+            // 检查陈旧程度
+            if (issue.state === 'open') {
+              const updatedAt = new Date(issue.updated_at);
+              const daysSinceUpdate = Math.floor((now - updatedAt) / (1000 * 60 * 60 * 24));
+              
+              if (daysSinceUpdate >= 30) {
+                stats.veryStale++;
+                stats.staleList.push({
+                  number: issue.number,
+                  title: issue.title,
+                  days: daysSinceUpdate,
+                  url: issue.html_url
+                });
+              } else if (daysSinceUpdate >= 7) {
+                stats.stale++;
+                stats.staleList.push({
+                  number: issue.number,
+                  title: issue.title,
+                  days: daysSinceUpdate,
+                  url: issue.html_url
+                });
+              }
+            }
+          });
+          
+          // 设置输出
+          core.setOutput('total', stats.total);
+          core.setOutput('open', stats.open);
+          core.setOutput('stale', stats.stale + stats.veryStale);
+          core.setOutput('urgent', stats.urgent);
+          
+          return stats;
+    
+    - name: Generate Report
+      env:
+        TOTAL_ISSUES: ${{ steps.scan.outputs.total }}
+        OPEN_ISSUES: ${{ steps.scan.outputs.open }}
+        STALE_ISSUES: ${{ steps.scan.outputs.stale }}
+        URGENT_ISSUES: ${{ steps.scan.outputs.urgent }}
+      run: |
+        echo "# 📊 Issue 扫描报告" > report.md
+        echo "" >> report.md
+        echo "**扫描时间:** $(date '+%Y-%m-%d %H:%M:%S')" >> report.md
+        echo "**仓库:** ${{ github.repository }}" >> report.md
+        echo "" >> report.md
+        
+        echo "## 📈 总体统计" >> report.md
+        echo "- **总Issues数:** $TOTAL_ISSUES" >> report.md
+        echo "- **Open Issues:** $OPEN_ISSUES" >> report.md
+        echo "- **Closed Issues:** $((TOTAL_ISSUES - OPEN_ISSUES))" >> report.md
+        
+        if [ "$TOTAL_ISSUES" -gt 0 ]; then
+          CLOSED_RATE=$(( (TOTAL_ISSUES - OPEN_ISSUES) * 100 / TOTAL_ISSUES ))
+          echo "- **解决率:** ${CLOSED_RATE}%" >> report.md
+        fi
+        
+        echo "- **陈旧Issues (7+天):** $STALE_ISSUES" >> report.md
+        echo "- **紧急Issues:** $URGENT_ISSUES" >> report.md
+        echo "" >> report.md
+        
+        echo "## 💡 建议" >> report.md
+        if [ "$STALE_ISSUES" -gt 0 ]; then
+          echo "1. **处理陈旧问题** - 考虑关闭或分配处理" >> report.md
+        fi
+        if [ "$URGENT_ISSUES" -gt 0 ]; then
+          echo "2. **优先处理紧急问题**" >> report.md
+        fi
+        if [ "$OPEN_ISSUES" -gt 10 ]; then
+          echo "3. **批量处理** - Open Issues数量较多" >> report.md
+        fi
+        
+        echo "" >> report.md
+        echo "## 🔍 详细分析" >> report.md
+        echo "完整分析数据可在GitHub Actions日志中查看。" >> report.md
+    
+    - name: Upload Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: issue-report
+        path: report.md
+    
+    - name: Create Issue for Critical Findings
+      if: steps.scan.outputs.urgent > 0 || steps.scan.outputs.stale > 5
+      uses: actions/github-script@v6
+      env:
+        URGENT_COUNT: ${{ steps.scan.outputs.urgent }}
+        STALE_COUNT: ${{ steps.scan.outputs.stale }}
+      with:
+        script: |
+          const today = new Date().toISOString().split('T')[0];
+          const title = `🚨 Issue扫描警报 - ${today}`;
+          
+          // 检查是否已有今天的警报
+          const { data: existingIssues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            labels: ['alert', 'scan-report']
+          });
+          
+          const hasTodayAlert = existingIssues.some(issue => 
+            issue.title.includes(today) || issue.title.includes('Issue扫描警报')
+          );
+          
+          if (!hasTodayAlert) {
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: `## 🚨 Issue扫描警报
+              
+              **扫描时间:** ${new Date().toISOString()}
+              
+              ### 发现的问题
+              - 🔴 紧急Issues: ${process.env.URGENT_COUNT} 个
+              - 🕰️ 陈旧Issues: ${process.env.STALE_COUNT} 个
+              
+              ### 建议
+              1. 立即处理紧急问题
+              2. 审查陈旧问题，考虑关闭或分配
+              3. 下载完整报告查看详情
+              
+              [查看扫描报告](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              labels: ['alert', 'scan-report', 'automated']
+            });
+          }
+    
+    - name: Summary
+      run: |
+        echo "✅ Issue扫描完成！"
+        echo "📊 统计结果:"
+        echo "  - 总Issues: ${{ steps.scan.outputs.total }}"
+        echo "  - Open Issues: ${{ steps.scan.outputs.open }}"
+        echo "  - 陈旧Issues: ${{ steps.scan.outputs.stale }}"
+        echo "  - 紧急Issues: ${{ steps.scan.outputs.urgent }}"
+        echo ""
+        echo "📁 报告已保存为Artifact: issue-report"
+        echo "🔗 查看报告: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
