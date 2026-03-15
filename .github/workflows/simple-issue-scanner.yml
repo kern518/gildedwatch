@@ -1,8 +1,6 @@
-on:
+name: Simple Issue Scanner
 
-permissions:
-  contents: read
-  issues: write
+on:
   # 定时触发：每天上午9点运行
   schedule:
     - cron: '0 9 * * *'
@@ -14,6 +12,10 @@ permissions:
         required: false
         default: false
         type: boolean
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   scan:
@@ -125,12 +127,11 @@ jobs:
           return stats;
     
     - name: Generate Report
-      env:
-        TOTAL_ISSUES: ${{ steps.scan.outputs.total }}
-        OPEN_ISSUES: ${{ steps.scan.outputs.open }}
-        STALE_ISSUES: ${{ steps.scan.outputs.stale }}
-        URGENT_ISSUES: ${{ steps.scan.outputs.urgent }}
       run: |
+        TOTAL_ISSUES="${{ steps.scan.outputs.total }}"
+        OPEN_ISSUES="${{ steps.scan.outputs.open }}"
+        STALE_ISSUES="${{ steps.scan.outputs.stale }}"
+        URGENT_ISSUES="${{ steps.scan.outputs.urgent }}"
         echo "# 📊 Issue 扫描报告" > report.md
         echo "" >> report.md
         echo "**扫描时间:** $(date '+%Y-%m-%d %H:%M:%S')" >> report.md
@@ -177,7 +178,6 @@ jobs:
       uses: actions/github-script@v7
       env:
         FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      env:
         URGENT_COUNT: ${{ steps.scan.outputs.urgent }}
         STALE_COUNT: ${{ steps.scan.outputs.stale }}
       with:
