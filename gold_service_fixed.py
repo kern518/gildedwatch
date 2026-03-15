@@ -214,6 +214,9 @@ def index():
                 <div class="price">
                     <span class="symbol">¥</span>{cny_price:.2f}
                 </div>
+                <div class="per-gram" style="font-size: 1.2em; margin-top: 10px; color: #666;">
+                    ≈ ¥{cny_per_gram:.2f}/克 (1盎司=31.1035克)
+                </div>
                 <div>汇率: 1 USD = 7.2 CNY</div>
             </div>
         </div>
