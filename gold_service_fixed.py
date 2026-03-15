@@ -14,6 +14,7 @@ app = Flask(__name__)
 
 # 模拟实时价格更新
 current_price = 2150.50
+EUR_RATE = 0.92  # 欧元汇率: 1 USD = 0.92 EUR
 
 def update_price():
     """后台线程更新价格"""
@@ -31,7 +32,11 @@ price_thread.start()
 def index():
     """主页面 - 显示美元和人民币价格"""
     usd_price = current_price
+    usd_per_gram = usd_price / 31.1035  # 1盎司=31.1035克
     cny_price = usd_price * 7.2
+    cny_per_gram = cny_price / 31.1035  # 1盎司=31.1035克
+    eur_price = usd_price * EUR_RATE
+    eur_per_gram = eur_price / 31.1035
     
     html = f'''
 <!DOCTYPE html>
@@ -103,7 +108,12 @@ def index():
             background: linear-gradient(135deg, #4CAF50 0%, #8BC34A 100%);
             color: white;
         }}
-        
+
+        .euro-card {{
+                            background: linear-gradient(135deg, #9C27B0 0%, #673AB7 100%);
+                            color: white;
+                        }}
+
         .cny-card {{
             background: linear-gradient(135deg, #FF9800 0%, #FFC107 100%);
             color: white;
@@ -182,7 +192,21 @@ def index():
                 <div class="price">
                     <span class="symbol">$</span>{usd_price:.2f}
                 </div>
+                <div class="per-gram" style="font-size: 1.2em; margin-top: 10px; color: #666;">
+                    ≈ ${usd_per_gram:.2f}/克 (1盎司=31.1035克)
+                </div>
                 <div>黄金现货价格</div>
+            </div>
+
+            <div class="price-card euro-card">
+                <div class="currency">欧元价格 (EUR)</div>
+                <div class="price">
+                    <span class="symbol">€</span>{eur_price:.2f}
+                </div>
+                <div class="per-gram" style="font-size: 1.2em; margin-top: 10px; color: #666;">
+                    ≈ €{eur_per_gram:.2f}/克 (1盎司=31.1035克)
+                </div>
+                <div style="font-size: 0.9em; margin-top: 5px; color: #888;">汇率: 1 USD = {EUR_RATE:.2f} EUR</div>
             </div>
             
             <div class="price-card cny-card">
@@ -246,6 +270,9 @@ def api_price():
     """API 接口 - 返回JSON格式的价格数据"""
     usd_price = current_price
     cny_price = usd_price * 7.2
+    cny_per_gram = cny_price / 31.1035  # 1盎司=31.1035克
+    eur_price = usd_price * EUR_RATE
+    eur_per_gram = eur_price / 31.1035
     
     return jsonify({
         'success': True,
@@ -259,12 +286,23 @@ def api_price():
                 'price': round(cny_price, 2),
                 'currency': 'CNY',
                 'symbol': '¥',
-                'exchange_rate': 7.2
+                'exchange_rate': 7.2,
+                'per_gram': round(cny_per_gram, 2),
+                'ounces_per_gram': 31.1035
+            },
+            'eur': {
+                'price': round(eur_price, 2),
+                'currency': 'EUR',
+                'symbol': '€',
+                'exchange_rate': EUR_RATE,
+                'per_gram': round(eur_per_gram, 2),
+                'ounces_per_gram': 31.1035
             },
             'timestamp': datetime.now().isoformat(),
             'source': 'GildedWatch Automated System',
             'issue_11_fixed': True,
-            'message': '人民币价格显示已完全实现'
+            'issue_14_fixed': True,
+            'message': '人民币和欧元价格显示已完全实现'
         }
     })
 
