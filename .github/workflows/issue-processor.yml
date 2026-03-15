@@ -1,6 +1,9 @@
 name: AI Issue Processor
 
 on:
+permissions:
+  contents: read
+  issues: write
   # 当Issue被创建或更新时触发
   issues:
     types: [opened, edited, labeled, reopened]
@@ -360,7 +363,9 @@ jobs:
     
     - name: Create Processing Summary
       if: always()
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       with:
         script: |
           const summary = `## 🤖 AI Issue 处理报告

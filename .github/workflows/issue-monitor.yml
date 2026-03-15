@@ -1,6 +1,9 @@
 name: Issue Monitor & Reporter
 
 on:
+permissions:
+  contents: read
+  issues: write
   # 定时触发：每天上午10点运行
   schedule:
     - cron: '0 10 * * *'
@@ -29,7 +32,9 @@ jobs:
     
     - name: Analyze Issues
       id: analyze
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       with:
         script: |
           // 获取所有issues
@@ -173,7 +178,9 @@ jobs:
           return analysis;
     
     - name: Create Daily Report Issue
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       env:
         ANALYSIS: ${{ toJson(steps.analyze.outputs.result) }}
       with:

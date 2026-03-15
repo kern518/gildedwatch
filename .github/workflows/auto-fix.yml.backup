@@ -7,19 +7,16 @@ on:
     # 每小时检查一次issue
     - cron: '0 * * * *'
 
-permissions:
-  contents: read
-  issues: write
-
 jobs:
   analyze-issue:
     runs-on: ubuntu-latest
     if: github.event_name == 'issues' || github.event_name == 'schedule'
+    permissions:
+      issues: write
+      contents: read
     
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
     
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -128,7 +125,6 @@ jobs:
       uses: actions/github-script@v7
       env:
         FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      env:
       with:
         script: |
           await github.rest.issues.createComment({
@@ -141,6 +137,9 @@ jobs:
   monitor-deploy:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
+    permissions:
+      issues: write
+      contents: read
     
     steps:
     - name: Check Deployment Status
@@ -154,7 +153,16 @@ jobs:
         echo "✅ 部署状态检查完成"
     
     - name: Create Deployment Report
-      if: false  # 暂时禁用，避免权限问题
-      run: |
-        echo "📊 部署报告功能已禁用"
-        echo "如需启用，请配置正确的权限"
+      uses: actions/github-script@v7
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      with:
+        script: |
+          // 创建部署状态报告
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `📊 部署状态报告 - ${new Date().toISOString().split('T')[0]}`,
+            body: `## 部署状态监控报告\n\n**检查时间:** ${new Date().toISOString()}\n\n### 状态概览\n- ✅ CI/CD 流水线正常\n- 🔄 自动修复功能启用\n- 📈 代码质量监控中\n\n### 建议\n1. 定期检查安全报告\n2. 监控测试覆盖率\n3. 更新依赖版本`,
+            labels: ['monitoring', 'report']
+          });
