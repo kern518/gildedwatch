@@ -1,0 +1,98 @@
+name: Daily Issue Report
+
+on:
+  schedule:
+    - cron: '0 10 * * *'  # 每天上午10点
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    
+    steps:
+    - name: Generate Daily Report
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'all',
+            per_page: 100
+          });
+          
+          const realIssues = issues.filter(issue => !issue.pull_request);
+          const openIssues = realIssues.filter(issue => issue.state === 'open');
+          const closedIssues = realIssues.filter(issue => issue.state === 'closed');
+          
+          const today = new Date().toISOString().split('T')[0];
+          const title = `📊 Issue日报 ${today}`;
+          
+          const report = `# ${title}
+
+**报告时间:** ${new Date().toISOString()}
+**仓库:** ${context.repo.owner}/${context.repo.repo}
+
+## 📈 统计
+- **总Issues:** ${realIssues.length}
+- **Open Issues:** ${openIssues.length}
+- **Closed Issues:** ${closedIssues.length}
+- **解决率:** ${realIssues.length > 0 ? Math.round(closedIssues.length / realIssues.length * 100) : 0}%
+
+## 🏷️ 标签统计
+${getLabelStats(realIssues)}
+
+## 🆕 最近更新（前5个）
+${getRecentIssues(realIssues)}
+
+## 💡 建议
+1. 处理未分类的 Issues
+2. 优先处理高优先级问题
+3. 定期清理陈旧 Issues
+
+---
+*本报告自动生成，每天上午10点运行*`;
+          
+          // 创建报告 Issue
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: report,
+            labels: ['report', 'automated']
+          });
+          
+          console.log(`✅ 创建日报: ${title}`);
+          
+          function getLabelStats(issues) {
+            const labelCount = {};
+            issues.forEach(issue => {
+              issue.labels.forEach(label => {
+                labelCount[label.name] = (labelCount[label.name] || 0) + 1;
+              });
+            });
+            
+            const sorted = Object.entries(labelCount)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 10);
+            
+            if (sorted.length === 0) return '暂无标签数据';
+            
+            return sorted.map(([label, count]) => `- \`${label}\`: ${count}`).join('\n');
+          }
+          
+          function getRecentIssues(issues) {
+            const recent = issues
+              .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+              .slice(0, 5);
+            
+            if (recent.length === 0) return '暂无最近更新';
+            
+            return recent.map(issue => {
+              const emoji = issue.state === 'open' ? '🟢' : '🔴';
+              const date = new Date(issue.updated_at).toLocaleDateString();
+              return `- ${emoji} [#${issue.number}](${issue.html_url}) ${issue.title} (${date})`;
+            }).join('\n');
+          }

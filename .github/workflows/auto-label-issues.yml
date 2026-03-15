@@ -1,0 +1,90 @@
+name: Auto Label Issues
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    
+    steps:
+    - name: Auto Label Issue
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const title = issue.title.toLowerCase();
+          const body = (issue.body || '').toLowerCase();
+          const content = title + ' ' + body;
+          const currentLabels = issue.labels.map(l => l.name);
+          const newLabels = [...currentLabels];
+          
+          console.log(`处理 Issue #${issue.number}: ${issue.title}`);
+          
+          // 简单规则：基于关键词添加标签
+          if (content.includes('bug') || content.includes('错误') || content.includes('修复')) {
+            if (!newLabels.includes('bug')) newLabels.push('bug');
+          }
+          
+          if (content.includes('feature') || content.includes('功能') || content.includes('新功能')) {
+            if (!newLabels.includes('enhancement')) newLabels.push('enhancement');
+          }
+          
+          if (content.includes('文档') || content.includes('documentation') || content.includes('readme')) {
+            if (!newLabels.includes('documentation')) newLabels.push('documentation');
+          }
+          
+          if (content.includes('问题') || content.includes('question') || content.includes('如何')) {
+            if (!newLabels.includes('question')) newLabels.push('question');
+          }
+          
+          // 优先级
+          if (content.includes('紧急') || content.includes('urgent') || content.includes('critical')) {
+            // 移除其他优先级标签
+            const priorityLabels = ['priority:critical', 'priority:high', 'priority:medium', 'priority:low'];
+            newLabels = newLabels.filter(label => !priorityLabels.includes(label));
+            newLabels.push('priority:critical');
+          } else if (content.includes('重要') || content.includes('high')) {
+            const priorityLabels = ['priority:critical', 'priority:high', 'priority:medium', 'priority:low'];
+            newLabels = newLabels.filter(label => !priorityLabels.includes(label));
+            newLabels.push('priority:high');
+          }
+          
+          // 更新标签（如果有变化）
+          if (JSON.stringify(newLabels.sort()) !== JSON.stringify(currentLabels.sort())) {
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: newLabels
+            });
+            console.log(`更新标签: ${newLabels.join(', ')}`);
+          }
+          
+          // 如果是新issue，添加简单评论
+          if (issue.comments === 0 && context.payload.action === 'opened') {
+            const comment = `👋 你好！感谢提交 Issue。
+
+我已自动添加了相关标签。
+
+**下一步：**
+1. 如果是bug，请提供复现步骤
+2. 如果是功能请求，请描述具体需求
+3. 如果是问题咨询，请明确问题
+
+我会定期检查这个 Issue。
+
+---
+*自动生成*`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: comment
+            });
+            console.log('添加欢迎评论');
+          }
