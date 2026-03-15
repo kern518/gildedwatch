@@ -1,6 +1,5 @@
-name: CI/CD Pipeline
-
 on:
+
 permissions:
   contents: read
   issues: write
@@ -153,7 +152,15 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `🚨 CI 测试失败 - ${new Date().toISOString().split('T')[0]}`,
-              body: `## CI 测试失败报告\n\n**提交:** ${{ github.sha }}\n**分支:** ${{ github.ref }}\n**原因:** ${{ steps.analyze.outputs.FAILURE_REASON }}\n\n请检查测试日志并修复问题。\n\n[查看运行详情](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
+              body: `## CI 测试失败报告
+
+**提交:** ${{ github.sha }}
+**分支:** ${{ github.ref }}
+**原因:** ${{ steps.analyze.outputs.FAILURE_REASON }}
+
+请检查测试日志并修复问题。
+
+[查看运行详情](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
               labels: ['bug', 'ci-failure', 'high-priority']
             });
           }
@@ -169,7 +176,14 @@ jobs:
             owner: context.repo.owner,
             repo: context.repo.repo,
             title: `🔒 发现高危安全漏洞 - ${new Date().toISOString().split('T')[0]}`,
-            body: `## 安全扫描报告\n\n**发现高危漏洞:** ${{ steps.analyze.outputs.HIGH_SECURITY_ISSUES }} 个\n**提交:** ${{ github.sha }}\n\n请立即检查并修复安全漏洞。\n\n[查看安全报告](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
+            body: `## 安全扫描报告
+
+**发现高危漏洞:** ${{ steps.analyze.outputs.HIGH_SECURITY_ISSUES }} 个
+**提交:** ${{ github.sha }}
+
+请立即检查并修复安全漏洞。
+
+[查看安全报告](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
             labels: ['security', 'high-priority', 'bug']
           });
 
@@ -220,7 +234,15 @@ jobs:
             repo: context.repo.repo,
             tag_name: version,
             name: `Release ${version}`,
-            body: `## 自动发布 ${version}\n\n**提交:** ${context.sha}\n**时间:** ${new Date().toISOString()}\n\n### 变更\n- CI/CD 自动化部署\n- 代码质量扫描\n- 安全检查`,
+            body: `## 自动发布 ${version}
+
+**提交:** ${context.sha}
+**时间:** ${new Date().toISOString()}
+
+### 变更
+- CI/CD 自动化部署
+- 代码质量扫描
+- 安全检查`,
             draft: false,
             prerelease: false
           });

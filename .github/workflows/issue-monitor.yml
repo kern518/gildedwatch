@@ -1,6 +1,5 @@
-name: Issue Monitor & Reporter
-
 on:
+
 permissions:
   contents: read
   issues: write
@@ -189,90 +188,125 @@ jobs:
           const today = new Date().toISOString().split('T')[0];
           
           // 生成报告内容
-          let report = `# 📊 Issue 每日报告 - ${today}\n\n`;
+          let report = `# 📊 Issue 每日报告 - ${today}
+
+`;
           
-          report += `**报告时间:** ${new Date().toISOString()}\n`;
-          report += `**触发方式:** ${context.eventName === 'workflow_dispatch' ? '手动' : '自动'}\n\n`;
+          report += `**报告时间:** ${new Date().toISOString()}
+`;
+          report += `**触发方式:** ${context.eventName === 'workflow_dispatch' ? '手动' : '自动'}
+
+`;
           
           // 总体统计
-          report += `## 📈 总体统计\n`;
-          report += `- **总Issues数:** ${analysis.summary.total}\n`;
-          report += `- **Open Issues:** ${analysis.summary.open}\n`;
-          report += `- **Closed Issues:** ${analysis.summary.closed}\n`;
+          report += `## 📈 总体统计
+`;
+          report += `- **总Issues数:** ${analysis.summary.total}
+`;
+          report += `- **Open Issues:** ${analysis.summary.open}
+`;
+          report += `- **Closed Issues:** ${analysis.summary.closed}
+`;
           
           if (analysis.summary.total > 0) {
             const closeRate = ((analysis.summary.closed / analysis.summary.total) * 100).toFixed(1);
-            report += `- **解决率:** ${closeRate}%\n`;
+            report += `- **解决率:** ${closeRate}%
+`;
           }
           
-          report += `- **今日新增:** ${analysis.summary.createdToday}\n`;
-          report += `- **本周新增:** ${analysis.summary.createdThisWeek}\n`;
-          report += `- **今日更新:** ${analysis.summary.updatedToday}\n\n`;
+          report += `- **今日新增:** ${analysis.summary.createdToday}
+`;
+          report += `- **本周新增:** ${analysis.summary.createdThisWeek}
+`;
+          report += `- **今日更新:** ${analysis.summary.updatedToday}
+
+`;
           
           // 需要关注的问题
-          report += `## ⚠️ 需要关注的问题\n`;
+          report += `## ⚠️ 需要关注的问题
+`;
           
           if (analysis.categories.urgent.length > 0) {
-            report += `### 🔴 紧急问题 (${analysis.categories.urgent.length}个)\n`;
+            report += `### 🔴 紧急问题 (${analysis.categories.urgent.length}个)
+`;
             analysis.categories.urgent.slice(0, 5).forEach(issue => {
-              report += `- [#${issue.number}](${issue.url}) ${issue.title}\n`;
+              report += `- [#${issue.number}](${issue.url}) ${issue.title}
+`;
             });
             if (analysis.categories.urgent.length > 5) {
-              report += `- ... 还有 ${analysis.categories.urgent.length - 5} 个紧急问题\n`;
+              report += `- ... 还有 ${analysis.categories.urgent.length - 5} 个紧急问题
+`;
             }
-            report += `\n`;
+            report += `
+`;
           }
           
           if (analysis.categories.veryStale.length > 0) {
-            report += `### 🕰️ 非常陈旧 (>30天无更新, ${analysis.categories.veryStale.length}个)\n`;
+            report += `### 🕰️ 非常陈旧 (>30天无更新, ${analysis.categories.veryStale.length}个)
+`;
             analysis.categories.veryStale.slice(0, 3).forEach(issue => {
-              report += `- [#${issue.number}](${issue.url}) ${issue.title} (${issue.days}天)\n`;
+              report += `- [#${issue.number}](${issue.url}) ${issue.title} (${issue.days}天)
+`;
             });
-            report += `\n`;
+            report += `
+`;
           }
           
           if (analysis.categories.stale.length > 0) {
-            report += `### 🟡 陈旧 (7-30天无更新, ${analysis.categories.stale.length}个)\n`;
+            report += `### 🟡 陈旧 (7-30天无更新, ${analysis.categories.stale.length}个)
+`;
             analysis.categories.stale.slice(0, 3).forEach(issue => {
-              report += `- [#${issue.number}](${issue.url}) ${issue.title} (${issue.days}天)\n`;
+              report += `- [#${issue.number}](${issue.url}) ${issue.title} (${issue.days}天)
+`;
             });
-            report += `\n`;
+            report += `
+`;
           }
           
           if (analysis.categories.noLabel.length > 0) {
-            report += `### 🏷️ 无标签问题 (${analysis.categories.noLabel.length}个)\n`;
+            report += `### 🏷️ 无标签问题 (${analysis.categories.noLabel.length}个)
+`;
             analysis.categories.noLabel.slice(0, 3).forEach(issue => {
-              report += `- [#${issue.number}](${issue.url}) ${issue.title}\n`;
+              report += `- [#${issue.number}](${issue.url}) ${issue.title}
+`;
             });
-            report += `\n`;
+            report += `
+`;
           }
           
           // 标签分布
           if (Object.keys(analysis.labels).length > 0) {
-            report += `## 🏷️ 标签分布\n`;
+            report += `## 🏷️ 标签分布
+`;
             const sortedLabels = Object.entries(analysis.labels)
               .sort((a, b) => b[1] - a[1])
               .slice(0, 10);
             
             sortedLabels.forEach(([label, count]) => {
-              report += `- \`${label}\`: ${count}\n`;
+              report += `- \`${label}\`: ${count}
+`;
             });
-            report += `\n`;
+            report += `
+`;
           }
           
           // 最近活动
           if (analysis.recentActivity.length > 0) {
-            report += `## 🔄 最近7天活动\n`;
+            report += `## 🔄 最近7天活动
+`;
             analysis.recentActivity.slice(0, 5).forEach(activity => {
               const emoji = activity.state === 'open' ? '🟢' : '🔴';
               const date = new Date(activity.updated).toLocaleDateString();
-              report += `- ${emoji} [#${activity.number}](${activity.url}) ${activity.title} (${date})\n`;
+              report += `- ${emoji} [#${activity.number}](${activity.url}) ${activity.title} (${date})
+`;
             });
-            report += `\n`;
+            report += `
+`;
           }
           
           // 建议
-          report += `## 💡 建议\n`;
+          report += `## 💡 建议
+`;
           
           const suggestions = [];
           
@@ -297,10 +331,13 @@ jobs:
           }
           
           suggestions.forEach((suggestion, index) => {
-            report += `${index + 1}. ${suggestion}\n`;
+            report += `${index + 1}. ${suggestion}
+`;
           });
           
-          report += `\n---\n`;
+          report += `
+---
+`;
           report += `*本报告由 GitHub Actions 自动生成，每天上午10点运行*`;
           
           // 创建issue

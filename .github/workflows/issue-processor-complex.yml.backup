@@ -1,0 +1,413 @@
+name: AI Issue Processor
+
+on:
+  # 当Issue被创建或更新时触发
+  issues:
+    types: [opened, edited, labeled, reopened]
+  # 定时扫描处理（每小时）
+  schedule:
+    - cron: '30 * * * *'
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      process_all:
+        description: '处理所有open issues'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  process-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    
+    # 如果是定时任务，处理所有open issues
+    # 如果是issue事件，只处理该issue
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        pip install openai anthropic requests python-dateutil
+    
+    - name: Analyze and Process Issue
+      id: process
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 如果需要AI处理，可以配置API密钥
+        # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python << 'EOF'
+        import os
+        import requests
+        import json
+        import re
+        from datetime import datetime
+        from dateutil import parser
+        
+        GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
+        REPO = os.environ['GITHUB_REPOSITORY']
+        HEADERS = {
+            'Authorization': f'token {GITHUB_TOKEN}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        
+        def get_issue(issue_number):
+            """获取issue详情"""
+            url = f'https://api.github.com/repos/{REPO}/issues/{issue_number}'
+            response = requests.get(url, headers=HEADERS)
+            response.raise_for_status()
+            return response.json()
+        
+        def analyze_issue_content(issue):
+            """分析issue内容"""
+            title = issue['title']
+            body = issue['body'] or ''
+            labels = [label['name'] for label in issue['labels']]
+            
+            analysis = {
+                'type': 'unknown',
+                'priority': 'medium',
+                'category': 'other',
+                'needs_triage': False,
+                'suggested_labels': [],
+                'suggested_assignee': None,
+                'estimated_effort': 'medium',
+                'can_auto_fix': False,
+                'auto_fix_suggestion': None
+            }
+            
+            # 基于标题和内容的关键词分析
+            content_lower = (title + ' ' + body).lower()
+            
+            # 判断问题类型
+            type_keywords = {
+                'bug': ['bug', '错误', '崩溃', 'crash', '不工作', '失效', 'broken'],
+                'feature': ['feature', '功能', '新功能', 'enhancement', '改进', '建议'],
+                'documentation': ['文档', 'documentation', 'readme', 'wiki', '说明'],
+                'question': ['问题', '疑问', 'question', 'how to', '怎么', '如何'],
+                'security': ['安全', 'security', '漏洞', 'vulnerability', '攻击'],
+                'performance': ['性能', 'performance', '慢', '优化', 'speed']
+            }
+            
+            for issue_type, keywords in type_keywords.items():
+                if any(keyword in content_lower for keyword in keywords):
+                    analysis['type'] = issue_type
+                    analysis['suggested_labels'].append(issue_type)
+                    break
+            
+            # 判断优先级
+            priority_keywords = {
+                'critical': ['紧急', 'urgent', 'critical', 'blocker', '生产环境', 'production'],
+                'high': ['重要', 'high', '尽快', '尽快修复'],
+                'medium': [],  # 默认
+                'low': ['低优先级', 'low', '优化', 'enhancement', 'when possible']
+            }
+            
+            analysis['priority'] = 'medium'  # 默认
+            for priority, keywords in priority_keywords.items():
+                if any(keyword in content_lower for keyword in keywords):
+                    analysis['priority'] = priority
+                    analysis['suggested_labels'].append(f'priority:{priority}')
+                    break
+            
+            # 判断是否需要人工处理
+            needs_triage_keywords = ['不确定', '不知道', 'help', '求助', '建议', '讨论']
+            if any(keyword in content_lower for keyword in needs_triage_keywords):
+                analysis['needs_triage'] = True
+                analysis['suggested_labels'].append('needs-triage')
+            
+            # 判断是否可以自动修复
+            # 代码相关的问题可能可以自动修复
+            code_patterns = [
+                r'代码错误.*\n```[a-z]*\n.*?\n```',
+                r'语法错误',
+                r'编译错误',
+                r'导入错误',
+                r'undefined.*is not defined',
+                r'AttributeError',
+                r'TypeError',
+                r'NameError'
+            ]
+            
+            for pattern in code_patterns:
+                if re.search(pattern, body, re.IGNORECASE | re.DOTALL):
+                    analysis['can_auto_fix'] = True
+                    analysis['auto_fix_suggestion'] = '检测到代码错误，可以尝试自动修复'
+                    analysis['suggested_labels'].append('auto-fixable')
+                    break
+            
+            # 文档相关问题也可以自动处理
+            if analysis['type'] == 'documentation':
+                doc_keywords = ['拼写错误', 'typo', '格式', '链接失效', 'broken link']
+                if any(keyword in content_lower for keyword in doc_keywords):
+                    analysis['can_auto_fix'] = True
+                    analysis['auto_fix_suggestion'] = '文档问题，可以自动修复'
+                    analysis['suggested_labels'].append('auto-fixable')
+            
+            # 估算工作量
+            if analysis['type'] == 'bug' and analysis['priority'] == 'critical':
+                analysis['estimated_effort'] = 'high'
+            elif analysis['type'] == 'documentation':
+                analysis['estimated_effort'] = 'low'
+            elif '简单' in content_lower or 'easy' in content_lower:
+                analysis['estimated_effort'] = 'low'
+            elif '复杂' in content_lower or '复杂' in content_lower:
+                analysis['estimated_effort'] = 'high'
+            
+            return analysis
+        
+        def apply_analysis(issue_number, analysis):
+            """应用分析结果到issue"""
+            current_issue = get_issue(issue_number)
+            current_labels = [label['name'] for label in current_issue['labels']]
+            
+            actions_taken = []
+            
+            # 1. 添加缺失的标签
+            new_labels = []
+            for label in analysis['suggested_labels']:
+                if label not in current_labels:
+                    new_labels.append(label)
+            
+            if new_labels:
+                # 合并现有标签和新标签
+                all_labels = list(set(current_labels + new_labels))
+                update_url = f'https://api.github.com/repos/{REPO}/issues/{issue_number}'
+                response = requests.patch(update_url, headers=HEADERS, json={'labels': all_labels})
+                if response.status_code == 200:
+                    actions_taken.append(f'添加标签: {", ".join(new_labels)}')
+            
+            # 2. 添加评论（如果是新issue且需要处理）
+            if current_issue['comments'] == 0:
+                comment = generate_welcome_comment(analysis)
+                comment_url = f'https://api.github.com/repos/{REPO}/issues/{issue_number}/comments'
+                response = requests.post(comment_url, headers=HEADERS, json={'body': comment})
+                if response.status_code == 201:
+                    actions_taken.append('添加欢迎评论')
+            
+            # 3. 如果是可以自动修复的问题，创建自动修复任务
+            if analysis['can_auto_fix']:
+                # 这里可以触发自动修复工作流
+                actions_taken.append('标记为可自动修复')
+            
+            return actions_taken
+        
+        def generate_welcome_comment(analysis):
+            """生成欢迎评论"""
+            comment = [
+                "👋 你好！我是 GildedWatch 的 AI 助手。",
+                "",
+                "我已经分析了你的 Issue，以下是我的分析结果：",
+                "",
+                f"**问题类型:** {analysis['type']}",
+                f"**优先级:** {analysis['priority']}",
+                f"**预估工作量:** {analysis['estimated_effort']}",
+                ""
+            ]
+            
+            if analysis['suggested_labels']:
+                comment.append(f"**建议标签:** `{'`, `'.join(analysis['suggested_labels'])}`")
+                comment.append("")
+            
+            if analysis['needs_triage']:
+                comment.append("⚠️ **需要人工处理:** 这个问题需要进一步讨论或明确需求。")
+                comment.append("")
+            
+            if analysis['can_auto_fix']:
+                comment.append("🤖 **可自动修复:** 这个问题可能会被自动修复。")
+                comment.append("")
+            
+            # 添加指导性建议
+            comment.append("## 💡 下一步建议")
+            
+            if analysis['type'] == 'bug':
+                comment.extend([
+                    "1. 请提供更多详细信息：",
+                    "   - 复现步骤",
+                    "   - 预期行为 vs 实际行为",
+                    "   - 错误日志或截图",
+                    "2. 确认是否在最新版本中复现",
+                    "3. 检查相关代码文件"
+                ])
+            elif analysis['type'] == 'feature':
+                comment.extend([
+                    "1. 请详细描述需求场景",
+                    "2. 说明这个功能解决什么问题",
+                    "3. 如果有UI/UX设计，请提供草图",
+                    "4. 讨论技术实现方案"
+                ])
+            elif analysis['type'] == 'documentation':
+                comment.extend([
+                    "1. 请指出具体的文档位置",
+                    "2. 提供正确的信息或链接",
+                    "3. 说明改进建议"
+                ])
+            else:
+                comment.append("请提供更多详细信息，以便我们更好地帮助你。")
+            
+            comment.append("")
+            comment.append("---")
+            comment.append("*本评论由 AI Issue Processor 自动生成*")
+            
+            return "\n".join(comment)
+        
+        def process_single_issue(issue_number):
+            """处理单个issue"""
+            print(f"🔍 处理 Issue #{issue_number}")
+            
+            try:
+                issue = get_issue(issue_number)
+                print(f"   标题: {issue['title']}")
+                print(f"   状态: {issue['state']}")
+                print(f"   标签: {[label['name'] for label in issue['labels']]}")
+                
+                # 分析issue内容
+                analysis = analyze_issue_content(issue)
+                print(f"   分析结果: {analysis['type']} ({analysis['priority']} priority)")
+                
+                # 应用分析结果
+                actions = apply_analysis(issue_number, analysis)
+                
+                if actions:
+                    print(f"   执行操作: {', '.join(actions)}")
+                else:
+                    print("   无需操作")
+                
+                return True
+                
+            except Exception as e:
+                print(f"❌ 处理失败: {e}")
+                return False
+        
+        def process_all_open_issues():
+            """处理所有open issues"""
+            print("🔍 开始处理所有open issues...")
+            
+            url = f'https://api.github.com/repos/{REPO}/issues'
+            params = {
+                'state': 'open',
+                'per_page': 50,
+                'sort': 'updated',
+                'direction': 'desc'
+            }
+            
+            page = 1
+            processed = 0
+            failed = 0
+            
+            while True:
+                params['page'] = page
+                response = requests.get(url, headers=HEADERS, params=params)
+                response.raise_for_status()
+                issues = response.json()
+                
+                if not issues:
+                    break
+                
+                # 过滤掉pull requests
+                real_issues = [issue for issue in issues if 'pull_request' not in issue]
+                
+                for issue in real_issues:
+                    success = process_single_issue(issue['number'])
+                    if success:
+                        processed += 1
+                    else:
+                        failed += 1
+                
+                if len(issues) < 50:
+                    break
+                
+                page += 1
+            
+            print(f"✅ 处理完成: {processed} 成功, {failed} 失败")
+            return processed, failed
+        
+        # 主逻辑
+        if __name__ == '__main__':
+            # 判断触发方式
+            event_path = os.environ.get('GITHUB_EVENT_PATH')
+            
+            if event_path and os.path.exists(event_path):
+                # Issue事件触发
+                with open(event_path, 'r') as f:
+                    event_data = json.load(f)
+                
+                issue_number = event_data['issue']['number']
+                process_single_issue(issue_number)
+                
+            elif os.environ.get('INPUT_PROCESS_ALL') == 'true':
+                # 手动触发，处理所有
+                processed, failed = process_all_open_issues()
+                print(f"::set-output name=processed_count::{processed}")
+                print(f"::set-output name=failed_count::{failed}")
+                
+            else:
+                # 定时任务，处理最近更新的issues
+                print("⏰ 定时任务：处理最近更新的issues")
+                # 这里可以添加逻辑处理最近更新的issues
+                print("ℹ️  定时任务逻辑待实现")
+        EOF
+    
+    - name: Create Processing Summary
+      if: always()
+      uses: actions/github-script@v7
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      with:
+        script: |
+          const summary = `## 🤖 AI Issue 处理报告
+          
+          **处理时间:** ${new Date().toISOString()}
+          **触发方式:** ${context.eventName}
+          
+          ### 处理结果
+          - ✅ 成功处理: ${{ steps.process.outputs.processed_count || 'N/A' }} 个issues
+          - ❌ 处理失败: ${{ steps.process.outputs.failed_count || 'N/A' }} 个issues
+          
+          ### 执行的操作
+          1. **自动分类** - 根据内容识别问题类型
+          2. **优先级标记** - 自动添加优先级标签
+          3. **智能回复** - 生成指导性评论
+          4. **可修复标记** - 识别可自动修复的问题
+          
+          ### 下次运行
+          - Issue创建/更新时自动触发
+          - 每小时定时扫描
+          - 可手动触发批量处理
+          
+          [查看工作流运行详情](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
+          
+          // 如果是批量处理，创建总结issue
+          if (context.eventName === 'workflow_dispatch' || context.eventName === 'schedule') {
+            const today = new Date().toISOString().split('T')[0];
+            const title = `🤖 Issue处理报告 ${today}`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: summary,
+              labels: ['automated', 'ai-processor', 'report']
+            });
+          }
+    
+    - name: Trigger Auto-Fix for Fixable Issues
+      if: steps.process.outputs.has_fixable_issues == 'true'
+      run: |
+        echo "🚀 检测到可自动修复的issues，触发自动修复工作流..."
+        # 这里可以触发另一个工作流来处理自动修复
+        echo "自动修复功能待实现"
